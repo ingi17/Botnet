@@ -1,11 +1,8 @@
 //
-// Simple chat server for TSAM-409
-//
-// Command line: ./chat_server 4000 
-//
-// Author: Jacky Mallett (jacky@ru.is)
+// Simple Botnet server for TSAM
 //
 // 130.208.243.61
+
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -336,6 +333,62 @@ void serverConnect(string server, string port)
     }
 }
 
+void SAVE_MSG(int sock, vector<string> tokens) {
+    string id, msg;
+    for (auto server : servers) {
+        id = server.second->id;
+        if (id == tokens[2]) {
+            msg = tokens[1] + "," + tokens[2] + "," + tokens[3];
+            server.second->messages.push_back(msg);
+            server.second->msgCount++;
+        }
+    }
+
+}
+
+void GET_MSG(int sock) {
+    string msg = "GET_MSG,P3_GROUP_62";
+    // msg += servers[sock]->id;
+    msg = setSohEoh(msg);
+    send(sock, msg.c_str(), msg.length(), 0);
+}
+
+void SEND_MSG(int sock, vector<string> tokens) {
+    string id;
+    int n;
+
+    // TOKENS[1] = FROM_GROUP_ID
+    // string msg = tokens[1] + ",";
+    // TOKENS[3] = MESSAGE_CONTENT
+    // msg += tokens[3] + ";";
+    string msg;
+
+    for (auto server : servers)
+    {
+        id = server.second->id;
+        // TOKENS[2] = TO_GROUP_ID
+        // cout << "Server: " << server.second->id << "\nToken: " << tokens[2].c_str() << endl;
+        if (id == tokens[2]) {
+
+            n = server.second->msgCount;
+
+            if (n < 0) {
+
+                while (n > 0) {
+                    msg = "SEND_MSG,";
+                    msg += server.second->messages.back();
+                    msg = setSohEoh(msg);
+                    send(sock, msg.c_str(), msg.length(), 0);
+
+                    server.second->messages.pop_back();
+                    server.second->msgCount--;
+                    n = server.second->msgCount;
+                }
+            }
+        }
+    }
+}
+
 void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
 {
     vector<string> tokens;
@@ -367,38 +420,19 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
         msg = setSohEoh(msg);
         send(sock, msg.c_str(), msg.length(), 0);
     }
-    else if(tokens[0].compare("KEEPALIVE") == 0) {
 
+    else if((tokens[0].compare("KEEPALIVE") == 0) && tokens.size() == 2) {
+        // Check if there are any messages waiting
+        if (stoi(tokens[1]) > 0) {
+            // If so, get all the messages
+            GET_MSG(sock);
+        }
     }
     else if((tokens[0].compare("GET_MSG") == 0) && tokens.size() == 2){
-        for (auto server : servers) {
-            if (server.second->id == tokens[2].c_str()) {
-                for (auto message : server.second->messages) {
-                    string msg = setSohEoh(message);
-                    send(server.second->sock, msg.c_str(), msg.length(), 0);
-                    server.second->messages.pop_back();
-                    server.second->msgCount--;
-                }
-            }
-        }
+        SEND_MSG(sock, tokens);
     }
     else if((tokens[0].compare("SEND_MSG") == 0) && tokens.size() == 4) {
-        // TOKENS[1] = FROM_GROUP_ID
-        string msg = tokens[1] + ",";
-
-        // TOKENS[3] = MESSAGE_CONTENT
-        msg += tokens[3] + ";";
-
-        for (auto server : servers)
-        {
-            // TOKENS[2] = TO_GROUP_ID
-            // cout << "Server: " << server.second->id << "\nToken: " << tokens[2].c_str() << endl;
-            if (server.second->id == tokens[2].c_str()) {
-                server.second->messages.push_back(msg);
-                server.second->msgCount++;
-                // send(server.second->sock, msg.c_str(), msg.length(), 0);
-            }
-        }
+        SAVE_MSG(sock, tokens);
     }
     else if(tokens[0].compare("LEAVE") == 0) {
         closeServer(sock, openSockets, maxfds);
@@ -466,9 +500,11 @@ void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
   }
   else if(tokens[0].compare("KEEPALIVE") == 0)
   {
-    string msg = setSohEoh("KEEPALIVE,0");
+    string msg = "KEEPALIVE,";
     printf("Sent KEEPALIVE\n");
     for (auto const& server : servers) {
+        msg += server.second->msgCount;
+        msg = setSohEoh(msg);
         send(server.second->sock, msg.c_str(), msg.length(), 0);
     }
   }
