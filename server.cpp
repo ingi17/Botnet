@@ -1,7 +1,13 @@
 //
 // Simple Botnet server for TSAM
 //
-// 130.208.243.61
+// Command: ./tsamvgroup62 <serverPort>
+// clientPort hardcoded as 4058
+//
+// Author: Ingi Thor Adalsteinsson
+// Template: Jacky Mallett (jacky@ru.is)
+//
+// skel: 130.208.243.61
 
 #include <stdio.h>
 #include <errno.h>
@@ -55,17 +61,18 @@ class Client
     ~Client(){}            // Virtual destructor defined for base class
 };
 
+// Class for handling connections from Servers,
 class Server
 {
     public:
         int sock;
-        string ip;
-        string id;
-        string port;
+        string ip;          // IP address of server
+        string id;          // GROUP_ID of server
+        string port;        // Port the server is connecting from
 
-        vector<string> messages;
+        vector<string> messages;    // Vector to hold messages for applicable server
 
-    Server(int socket, string ip, string port)
+    Server(int socket, string ip, string port)  // Constructor - id gets filled later
     {
         sock = socket;
         this->ip = ip;
@@ -75,8 +82,8 @@ class Server
     ~Server(){}
 };
 
-const int clientPort = 4058;
-int serverPort = 0;
+const int clientPort = 4058;        // Port for listening to client connections
+int serverPort = 0;                 // Server Port, this gets set from the command line argument
 
 // Note: map is not necessarily the most efficient method to use here,
 // especially for a server with large numbers of simulataneous connections,
@@ -147,12 +154,17 @@ int open_socket(int portno)
    }
 }
 
+// ------------------ Helper functions ------------------
+
+// --------- String formatting functions
+// Add token character 01 to start of string and 04 to end of string
 string setSohEoh(string msg)
 {
     msg = '\1' + msg + '\4';
     return msg;
 }
 
+// Remove token characters from string
 string rmSohEoh(string msg)
 {
     if(msg.length() != 0)
@@ -163,6 +175,7 @@ string rmSohEoh(string msg)
     return msg;
 }
 
+// --------- Get local IP
 string myIp()
 {
     struct ifaddrs *myaddrs, *ifa;
@@ -191,7 +204,7 @@ string myIp()
                 in_addr = &s4->sin_addr;
                 break;
             }
-
+            // I don't like IPv6 >:(
             case AF_INET6:
             {
                 continue;
@@ -214,24 +227,10 @@ string myIp()
     return output;
 }
 
-void keepAlive()
-{
-    string msg;
-    while(true) {
-        this_thread::sleep_for(chrono::seconds(60));
-        for (auto const& server : servers) {
-            // cout << "SERVER INFO: " << server.second->sock << "," << server.second->id << "," << server.second->messages.size() << endl;
-            msg = "KEEPALIVE,";
-            msg = setSohEoh(msg + to_string(server.second->messages.size()));
-            cout << "Sent KEEPALIVE," << server.second->messages.size() << " to " << server.second->id << endl;
-            send(server.second->sock, msg.c_str(), msg.length(), 0);
-        }
-    }
-}
+// ------------------ Connection Functions ------------------
 
 // Close a client's connection, remove it from the client list, and
 // tidy up select sockets afterwards.
-
 void closeClient(int clientSocket, fd_set *openSockets, int *maxfds)
 {
      // Remove client from the clients list
@@ -254,6 +253,7 @@ void closeClient(int clientSocket, fd_set *openSockets, int *maxfds)
      FD_CLR(clientSocket, openSockets);
 }
 
+// Close connection from server. Almost identical to closeClient function
 void closeServer(int servSocket, fd_set *openSockets, int *maxfds)
 {
     printf("Server closed the connection: %d\n", servSocket);
@@ -270,10 +270,16 @@ void closeServer(int servSocket, fd_set *openSockets, int *maxfds)
     FD_CLR(servSocket, openSockets);
 }
 
+// --------- Connect to server
+// Function for handling the clients CONNECT command. 
+// Passes ip and port as parameters for designated server to connect to.
+// Performs initial LISTSERVERS and SERVERS response handshake between servers.
+// This could have been written a lot more cleanly, however it works like this and
+// I don't dare touch it again.
 void serverConnect(string server, string port)
 {
+    // Attempt connect to server:port
     struct sockaddr_in address;
-
     bzero(&address, sizeof(address));
     
     address.sin_family = AF_INET;
@@ -281,19 +287,21 @@ void serverConnect(string server, string port)
     address.sin_port = htons(stoi(port));
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-
     if(connect(sock, (struct sockaddr*) &address, sizeof(address)) < 0) {
         perror("Error: failed to connect");
         exit(0);
     }
-    cout << "Connected to " << server << " on socket " << sock << endl;
 
+    cout << "Connected to " << server << " on socket " << sock << endl;
+    
+    // Add server to servers map. GROUPID gets filled later 
     servers[sock] = new Server(sock, server, port);
 
+    // Open new buffer to read initial LISTSERVERS
     char buffer[1025];
     read(sock, buffer, sizeof(buffer));
     string msg = rmSohEoh(buffer);
-    cout << msg << "\n" << endl;
+    cout << "SERVER: " << msg << "\n" << endl;
     
     vector<string> tokens;
     string token;
@@ -302,10 +310,13 @@ void serverConnect(string server, string port)
     while(getline(stream, token, ','))
         tokens.push_back(token);
 
+    // Check if the server sent the correct LISTSERVERS reply
     if (tokens[0].compare("LISTSERVERS") == 0)
     {
+        // Set GROUP_ID parameter for this server
         servers[sock]->id = tokens[1];
 
+        // Reply with my known servers, starting with myself
         string listservers = "SERVERS,P3_GROUP_62,";
         listservers += myIp() + "," + to_string(serverPort) + ";";
         for(auto const& server : servers) {
@@ -320,28 +331,62 @@ void serverConnect(string server, string port)
         }
 
         cout << "SEND: " << listservers << endl;
-        listservers = setSohEoh("LISTSERVERS,P3_GROUP_62");
 
+        listservers = setSohEoh("LISTSERVERS,P3_GROUP_62");
         send(sock, listservers.c_str(), listservers.length(), 0);
 
+        // Read SERVERS reply from the server
         read(sock, buffer, sizeof(buffer));
         string msg = rmSohEoh(buffer);
-        cout << msg << "\n" << endl;
+        cout << "SERVER:" << msg << "\n" << endl;
 
     }
 }
 
-void SAVE_MSG(int sock, vector<string> tokens) {
+// ------------------ Command Functions ------------------
+
+// Standalone function to handle the timed KEEPALIVE command.
+// Keepalive is launched in a seperate thread and uses chrono to sleep
+// the thread for 60 seconds before sending a KEEPALIVE command to all
+// known servers, along with the amount of messages stored.
+void keepAlive()
+{
+    string msg;
+    while(true) {
+        this_thread::sleep_for(chrono::seconds(60));
+        for (auto const& server : servers) {
+            // DEBUG: List all known servers every minute for debugging
+            // cout << "SERVER INFO: " << server.second->sock << "," << server.second->id << "," << server.second->messages.size() << endl;
+            msg = "KEEPALIVE,";
+            msg = setSohEoh(msg + to_string(server.second->messages.size()));
+            cout << "Sent KEEPALIVE," << server.second->messages.size() << " to " << server.second->id << endl;
+            send(server.second->sock, msg.c_str(), msg.length(), 0);
+        }
+    }
+}
+
+// Saves messages sent to the server.
+// FORMAT: SEND_MSG,<FROM_GROUP>,<TO_GROUP>,<MESSAGE>
+// Adds FROM_GROUP,TO_GROUP,MESSAGE to the message vector of the designated server.
+void SAVE_MSG(vector<string> tokens) {
+    // TOKENS[1] = FROM_GROUP_ID
+    // TOKENS[2] = TO_GROUP_ID
+    // TOKENS[3] = MESSAGE_CONTENT
     string id, msg;
     for (auto server : servers) {
         id = server.second->id;
         if (id == tokens[2]) {
             msg = tokens[1] + "," + tokens[2] + "," + tokens[3];
+            cout << "pre-store: " << msg << endl;
             server.second->messages.push_back(msg);
+            cout << "post-store: " << server.second->messages.back() << endl;
         }
     }
 }
 
+// Requests messaged stored for myself from other servers.
+// An additional groupID parameter could be passed to fetch messages for other groups
+// although I don't see a case where I would need to grab someone else's messages
 void GET_MSG(int sock) {
     string msg = "GET_MSG,P3_GROUP_62";
     cout << "SEND: " << msg << endl;
@@ -349,24 +394,22 @@ void GET_MSG(int sock) {
     send(sock, msg.c_str(), msg.length(), 0);
 }
 
+// Send all messages I have stored to the server that requested it if the ID matches
 void SEND_MSG(int sock, vector<string> tokens) {
-    string id;
-
-    // TOKENS[1] = FROM_GROUP_ID
-    // string msg = tokens[1] + ",";
-    // TOKENS[3] = MESSAGE_CONTENT
-    // msg += tokens[3] + ";";
-    string msg;
+    string id, msg;
 
     for (auto server : servers)
     {
         id = server.second->id;
-        // TOKENS[2] = TO_GROUP_ID
-        // cout << "Server: " << server.second->id << "\nToken: " << tokens[2].c_str() << endl;
+
+        // Check if the id is the one corrected
         if (id == tokens[1]) {
+
+            // Send and pop messages from the vector until its 0
             while(server.second->messages.size() != 0) {
+
                 msg = "SEND_MSG,";
-                msg += server.second->messages.back();
+                msg += server.second->messages.back();  
 
                 cout << "SEND: " << msg << endl;
                 msg = setSohEoh(msg);
@@ -379,18 +422,25 @@ void SEND_MSG(int sock, vector<string> tokens) {
     }
 }
 
+// --------- Server Commands
+// Function to handle incoming commands from other servers
 void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
 {
+    
+    // Split incoming tokens on commas
     vector<string> tokens;
     string token;
 
-    stringstream ss(buffer);
+    stringstream ss(rmSohEoh(buffer));
 
     while(getline(ss, token, ','))
         tokens.push_back(token);
 
 
-    if(tokens[0].compare("LISTSERVERS") == 0)
+    // LISTSERVERS
+    // Response: SERVERS,<GROUP_ID>,<IP>,<Port>;
+    // Starts with myself and then all other known servers
+    if((tokens[0].compare("LISTSERVERS") == 0) && tokens.size() == 2)
     {
         servers[sock]->id = tokens[1];
 
@@ -410,10 +460,16 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
         msg = setSohEoh(msg);
         send(sock, msg.c_str(), msg.length(), 0);
     }
+    // SERVERS,<GROUP_ID>,<IP>,<Port>;
+    // Response: N/A
+    // Updates GROUP_ID for server on the applicable socket
     else if(tokens[0].compare("SERVERS") == 0) {
         servers[sock]->id = tokens[1];
     }
-
+    // KEEPALIVE,<Stored_Messages>
+    // Response: GET_MSG,<GROUP_ID>
+    // Receiving KEEPALIVE alerts my server to keep the connection to
+    // the other server alive and if there are any messages stored for me
     else if((tokens[0].compare("KEEPALIVE") == 0) && tokens.size() == 2) {
         // Check if there are any messages waiting
         if (stoi(tokens[1]) > 0) {
@@ -421,16 +477,32 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
             GET_MSG(sock);
         }
     }
+    // GET_MSG,<GROUP_ID>
+    // Response: SEND_MSG,<FROM_GROUP_ID>,<TO_GROUP_ID>,<MESSAGE_CONTENT>
+    // Receiving GET_MSG instructs my server to send all messages for the GROUP_ID
+    // to the applicable socket/server
     else if((tokens[0].compare("GET_MSG") == 0) && tokens.size() == 2){
         SEND_MSG(sock, tokens);
     }
+    // SEND_MSG,<FROM_GROUP_ID>,<TO_GROUP_ID>,<MESSAGE_CONTENT>
+    // RESPONSE: N/A
+    // Stores message received in the applicable server vector
     else if((tokens[0].compare("SEND_MSG") == 0) && tokens.size() == 4) {
-        cout << "SEND MSG RECEIVED" << endl;
-        SAVE_MSG(sock, tokens);
+        cout << "SERVER: SEND MSG RECEIVED" << endl;
+        SAVE_MSG(tokens);
     }
+    // LEAVE
+    // RESPONSE: N/A
+    // The assignment instructs to make LEAVE,IP,PORT but that would let a server
+    // tell my server to disconnect from another server, which doesn't make much sense to me
+    // Decided to have leave just close the socket that sent the leave command.
     else if(tokens[0].compare("LEAVE") == 0) {
         closeServer(sock, openSockets, maxfds);
     }
+    // STATUSREQ,<FROM_GROUP_ID>
+    // RESPONSE: STATUSRESP,<GROUP_ID>,<Stored_Messages>
+    // This command will never be received as the client has no way to instruct it
+    // However it's still implemented. Simple for auto loop like almost all other functions
     else if((tokens[0].compare("STATUSREQ") == 0) && tokens.size() == 2) {
         string msg = "STATUSRESP,";
         for (auto const& server : servers) {
@@ -442,8 +514,9 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
         send(sock, msg.c_str(), msg.length(), 0);
     }
 }
-// Process command from client on the server
 
+// --------- Client Commands
+// Process command from client to server
 void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds, 
                   char *buffer) 
 {
@@ -456,42 +529,70 @@ void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
   while(getline(stream, token, ','))
         tokens.push_back(token);
 
+  // CONNECT,<IP>,<PORT>
+  // RESPONSE: N/A
+  // Function not listed in the Assignment description but our client needs
+  // a way to instruct the server to connect to another server
   if((tokens[0].compare("CONNECT") == 0) && (tokens.size() == 3))
   {
     serverConnect(tokens[1], tokens[2]);
   }
-  else if((tokens[0].compare("LISTSERVERS") == 0) && (tokens.size() >= 1))
+  // LISTSERVERS
+  // RESPONSE: SERVERS,<GROUP_ID>,<IP>,<Port>;
+  // Sends LISTSERVERS command to the server as if my client was a server
+  // the response is then sent to the clientsocket instead of serversocket
+  else if(strncmp(tokens[0].c_str(), "LISTSERVERS", 11) == 0)
   {
-      string msg = "\x01LISTSERVERS,P3_GROUP_62\x04";
+      string msg = setSohEoh("LISTSERVERS,P3_GROUP_62");
       serverCommand(clientSocket, openSockets, maxfds, msg);
-
   }
+  // STATUSREQ
+  // RESPONSE: N/A
+  // Sends STATUSREQ to all known servers to test statusreq functionality
+  else if(strncmp(tokens[0].c_str(), "STATUSREQ", 9) == 0){
+      string msg = "STATUSREQ,P3_GROUP_62";
+      for (auto const& server : servers) {
+          send(server.second->sock, msg.c_str(), msg.length(), 0);
+      }
+  }
+  // LEAVE
+  // RESPONSE: N/A
+  // Close the socket, and leave the socket handling code to deal with
+  // tidying up clients etc. when select() detects the OS has torn down the connection.
   else if(tokens[0].compare("LEAVE") == 0)
   {
-      // Close the socket, and leave the socket handling
-      // code to deal with tidying up clients etc. when
-      // select() detects the OS has torn down the connection.
- 
       closeClient(clientSocket, openSockets, maxfds);
   }
+  // GETMSG,<GROUP_ID>
+  // RESPONSE: <FROM_GROUP_ID>,<TO_GROUP_ID>,<MESSAGE_CONTENT>
+  // Displays the latest comment assigned to the group ID parameter
   else if((tokens[0].compare("GETMSG") == 0) && tokens.size() == 2) {
       string msg;
       for (auto const& server : servers) {
           if (server.second->id == tokens[1]) {
-            msg = *server.second->messages.data();
+            msg = server.second->messages.back();
             send(clientSocket, msg.c_str(), msg.length(), 0);
           }
       }
   }
+  // SENDMSG,<GROUP_ID>,<MESSAGE_CONTENT>
+  // RESPONSE: N/A
+  // Sends a single message to the server to store for the GROUP_ID
   else if((tokens[0].compare("SENDMSG") == 0) && tokens.size() == 3) {
-      string msg = + "P3_GROUP_62" + tokens[1] + ",";
+      string msg = "P3_GROUP_62,";
+      msg += tokens[1] + ",";
       msg += tokens[2];
       for (auto server : servers) {
           if (server.second->id == tokens[1]) {
+              cout << "pre " << msg << endl;
               server.second->messages.push_back(msg);
+              cout << "post " << server.second->messages.back() << endl;
           }
       }
   }
+  // KEEPALIVE
+  // RESPONSE: N/A
+  // Forces a keepalive message to all known servers. Mostly for debugging purposes
   else if(tokens[0].compare("KEEPALIVE") == 0)
   {
     string msg = "KEEPALIVE,";
@@ -508,6 +609,7 @@ void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
   }
 }
 
+// ------------------ MAIN ------------------
 int main(int argc, char* argv[])
 {
     bool finished;
@@ -583,19 +685,11 @@ int main(int argc, char* argv[])
         }
         else
         {
+            // Server socket handling, almost identical to clientSocket
             if(FD_ISSET(servSock, &readSockets)) {
 
                 listenSock = accept(servSock, (struct sockaddr *)&server, &servLen);
                 printf("Server accept\n");
-
-                //string listservers = "\x01LISTSERVERS,P3_GROUP_62\x04";
-                //if (write(listenSock, listservers.c_str(), listservers.length()) < 0) {
-                //    printf("send failed");
-                //}
-                //memset(buffer, 0, sizeof(buffer));
-                //if (read(listenSock, buffer, sizeof(buffer)) < 0) {
-                //    printf("recv failed");
-                //}
 
                 cout << buffer << endl;
 
@@ -604,9 +698,6 @@ int main(int argc, char* argv[])
                 inet_ntop(AF_INET, &ip_addr, ip, INET_ADDRSTRLEN);
 
                 FD_SET(listenSock, &openSockets);
-
-                
-
 
                 maxfds = max(maxfds, listenSock);
                 servers[listenSock] = new Server(listenSock, ip, to_string(server.sin_port));
@@ -641,9 +732,9 @@ int main(int argc, char* argv[])
 
                printf("Client connected on server: %d\n", listenSock);
             }
-            // Now check for commands from clients
             while(n-- > 0)
             {
+               // Now check for commands from clients
                for(auto const& pair : clients)
                {
                   Client *client = pair.second;
@@ -668,6 +759,7 @@ int main(int argc, char* argv[])
                       }
                   }
                }
+               // Server command checking, identical to client
                for(auto const& pair : servers)
                {
                    Server *server = pair.second;
@@ -681,7 +773,7 @@ int main(int argc, char* argv[])
                        }
                        else {
                            cout << "Server: " << rmSohEoh(buffer) << endl;
-                           serverCommand(server->sock, &openSockets, &maxfds, rmSohEoh(buffer));
+                           serverCommand(server->sock, &openSockets, &maxfds, buffer);
                        }
                    }
                }
