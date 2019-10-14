@@ -159,8 +159,11 @@ string setSohEoh(string msg)
 
 string rmSohEoh(string msg)
 {
-    msg = msg.substr(1);
-    msg.pop_back();
+    if(msg.length() != 0)
+    {
+        msg = msg.substr(1);
+        msg.pop_back();
+    }
     return msg;
 }
 
@@ -217,10 +220,16 @@ string myIp()
     return output;
 }
 
-void keepAlive(int sock)
+void keepAlive()
 {
-    this_thread::sleep_for(chrono::seconds(60));
-    for (auto const &server : servers)
+    string msg = setSohEoh("KEEPALIVE,0");
+    while(true) {
+        this_thread::sleep_for(chrono::seconds(90));
+        printf("Sent KEEPALIVE\n");
+        for (auto const& server : servers) {
+            send(server.second->sock, msg.c_str(), msg.length(), 0);
+        }
+    }
 }
 
 // Close a client's connection, remove it from the client list, and
@@ -358,6 +367,17 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
     else if(tokens[0].compare("KEEPALIVE") == 0) {
 
     }
+    else if((tokens[0].compare("SEND_MSG") == 0) && tokens.size() == 4) {
+        string msg = tokens[1] + ": ";
+        msg += tokens[2];
+        for (auto const& server : servers)
+        {
+            cout << "Server: " << server.second->id << "\nToken: " << tokens[2].c_str() << endl;
+            if (server.second->id == tokens[2].c_str()) {
+                send(server.second->sock, msg.c_str(), msg.length(), 0);
+            }
+        }
+    }
 }
 // Process command from client on the server
 
@@ -436,6 +456,14 @@ void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
           }
       }
   }
+  else if(tokens[0].compare("KEEPALIVE") == 0)
+  {
+    string msg = setSohEoh("KEEPALIVE,0");
+    printf("Sent KEEPALIVE\n");
+    for (auto const& server : servers) {
+        send(server.second->sock, msg.c_str(), msg.length(), 0);
+    }
+  }
   else
   {
       std::cout << "Unknown command from client: " << buffer << std::endl;
@@ -496,7 +524,7 @@ int main(int argc, char* argv[])
         maxfds = clientSock;
     }
 
-    // Detach thread to 
+    // Detach thread to call keepAlive every minute
     thread(keepAlive).detach();
 
     finished = false;
@@ -543,8 +571,6 @@ int main(int argc, char* argv[])
 
 
                 maxfds = max(maxfds, listenSock);
-                cout << "ip " << ip << endl;
-                cout << "ip_addr " << ip << endl;
                 servers[listenSock] = new Server(listenSock, ip, to_string(server.sin_port));
                 n--;
                 
@@ -552,8 +578,6 @@ int main(int argc, char* argv[])
                 listserver = setSohEoh(listserver);
 
                 send(listenSock, listserver.c_str(), listserver.length(), 0);
-
-                thread(keepAlive).detach();
 
                 printf("Server IP %s connected on socket: %d\n", ip, servSock);
             }
