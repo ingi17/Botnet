@@ -25,7 +25,7 @@
 #include <net/if.h>
 #include <ifaddrs.h>
 
-#include <ctime>
+#include <list>
 
 #include <iostream>
 #include <sstream>
@@ -65,15 +65,17 @@ class Server
         string ip;
         string id;
         string port;
-    
+
+        vector<string> messages;
+        int msgCount;
+
     Server(int socket, string ip, string port)
     {
         sock = socket;
         this->ip = ip;
         this->port = port;
-    }
-    Server(string id) {
-        this->id = id;
+
+        msgCount = 0;
     }
 
     ~Server(){}
@@ -222,11 +224,12 @@ string myIp()
 
 void keepAlive()
 {
-    string msg = setSohEoh("KEEPALIVE,0");
+    string msg = "KEEPALIVE,";
     while(true) {
         this_thread::sleep_for(chrono::seconds(90));
         printf("Sent KEEPALIVE\n");
         for (auto const& server : servers) {
+            msg = setSohEoh(msg + to_string(server.second->msgCount));
             send(server.second->sock, msg.c_str(), msg.length(), 0);
         }
     }
@@ -367,16 +370,47 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
     else if(tokens[0].compare("KEEPALIVE") == 0) {
 
     }
-    else if((tokens[0].compare("SEND_MSG") == 0) && tokens.size() == 4) {
-        string msg = tokens[1] + ": ";
-        msg += tokens[2];
-        for (auto const& server : servers)
-        {
-            cout << "Server: " << server.second->id << "\nToken: " << tokens[2].c_str() << endl;
+    else if((tokens[0].compare("GET_MSG") == 0) && tokens.size() == 2){
+        for (auto server : servers) {
             if (server.second->id == tokens[2].c_str()) {
-                send(server.second->sock, msg.c_str(), msg.length(), 0);
+                for (auto message : server.second->messages) {
+                    string msg = setSohEoh(message);
+                    send(server.second->sock, msg.c_str(), msg.length(), 0);
+                    server.second->messages.pop_back();
+                    server.second->msgCount--;
+                }
             }
         }
+    }
+    else if((tokens[0].compare("SEND_MSG") == 0) && tokens.size() == 4) {
+        // TOKENS[1] = FROM_GROUP_ID
+        string msg = tokens[1] + ",";
+
+        // TOKENS[3] = MESSAGE_CONTENT
+        msg += tokens[3] + ";";
+
+        for (auto server : servers)
+        {
+            // TOKENS[2] = TO_GROUP_ID
+            // cout << "Server: " << server.second->id << "\nToken: " << tokens[2].c_str() << endl;
+            if (server.second->id == tokens[2].c_str()) {
+                server.second->messages.push_back(msg);
+                server.second->msgCount++;
+                // send(server.second->sock, msg.c_str(), msg.length(), 0);
+            }
+        }
+    }
+    else if(tokens[0].compare("LEAVE") == 0) {
+        closeServer(sock, openSockets, maxfds);
+    }
+    else if((tokens[0].compare("STATUSREQ") == 0) && tokens.size() == 2) {
+        string msg = "STATUSRESP,";
+        for (auto const& server : servers) {
+            msg += server.second->id + ",";
+            msg += to_string(server.second->msgCount) + ",";
+        }
+        msg = setSohEoh(msg);
+        send(sock, msg.c_str(), msg.length(), 0);
     }
 }
 // Process command from client on the server
@@ -390,8 +424,8 @@ void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
   // Split command from client into tokens for parsing
   std::stringstream stream(buffer);
   std::cout << buffer << std::endl;
-  while(stream >> token)
-      tokens.push_back(token);
+  while(getline(stream, token, ','))
+        tokens.push_back(token);
 
   if((tokens[0].compare("CONNECT") == 0) && (tokens.size() == 3))
   {
@@ -411,48 +445,22 @@ void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
  
       closeClient(clientSocket, openSockets, maxfds);
   }
-  else if(tokens[0].compare("WHO") == 0)
-  {
-     std::cout << "Who is logged on" << std::endl;
-     std::string msg;
-
-     for(auto const& names : clients)
-     {
-        msg += names.second->name + ",";
-
-     }
-     // Reducing the msg length by 1 loses the excess "," - which
-     // granted is totally cheating.
-     send(clientSocket, msg.c_str(), msg.length()-1, 0);
-
-  }
-  // This is slightly fragile, since it's relying on the order
-  // of evaluation of the if statement.
-  else if((tokens[0].compare("MSG") == 0) && (tokens[1].compare("ALL") == 0))
-  {
-      std::string msg;
-      for(auto i = tokens.begin()+2;i != tokens.end();i++) 
-      {
-          msg += *i + " ";
-      }
-
-      for(auto const& pair : clients)
-      {
-          send(pair.second->sock, msg.c_str(), msg.length(),0);
+  else if((tokens[0].compare("GETMSG") == 0) && tokens.size() == 2) {
+      string msg;
+      for (auto const& server : servers) {
+          if (server.second->id == tokens[1]) {
+            msg = *server.second->messages.data();
+            send(clientSocket, msg.c_str(), msg.length(), 0);
+          }
       }
   }
-  else if(tokens[0].compare("MSG") == 0)
-  {
-      for(auto const& pair : clients)
-      {
-          if(pair.second->name.compare(tokens[1]) == 0)
-          {
-              std::string msg;
-              for(auto i = tokens.begin()+2;i != tokens.end();i++) 
-              {
-                  msg += *i + " ";
-              }
-              send(pair.second->sock, msg.c_str(), msg.length(),0);
+  else if((tokens[0].compare("SENDMSG") == 0) && tokens.size() == 3) {
+      string msg = tokens[1] + ",";
+      msg += tokens[2] + ";";
+      for (auto server : servers) {
+          if (server.second->id == tokens[1]) {
+              server.second->messages.push_back(msg);
+              server.second->msgCount++;
           }
       }
   }
