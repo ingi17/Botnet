@@ -64,15 +64,12 @@ class Server
         string port;
 
         vector<string> messages;
-        int msgCount;
 
     Server(int socket, string ip, string port)
     {
         sock = socket;
         this->ip = ip;
         this->port = port;
-
-        msgCount = 0;
     }
 
     ~Server(){}
@@ -166,8 +163,6 @@ string rmSohEoh(string msg)
     return msg;
 }
 
-
-
 string myIp()
 {
     struct ifaddrs *myaddrs, *ifa;
@@ -221,12 +216,14 @@ string myIp()
 
 void keepAlive()
 {
-    string msg = "KEEPALIVE,";
+    string msg;
     while(true) {
-        this_thread::sleep_for(chrono::seconds(90));
-        printf("Sent KEEPALIVE\n");
+        this_thread::sleep_for(chrono::seconds(60));
         for (auto const& server : servers) {
-            msg = setSohEoh(msg + to_string(server.second->msgCount));
+            // cout << "SERVER INFO: " << server.second->sock << "," << server.second->id << "," << server.second->messages.size() << endl;
+            msg = "KEEPALIVE,";
+            msg = setSohEoh(msg + to_string(server.second->messages.size()));
+            cout << "Sent KEEPALIVE," << server.second->messages.size() << " to " << server.second->id << endl;
             send(server.second->sock, msg.c_str(), msg.length(), 0);
         }
     }
@@ -322,6 +319,7 @@ void serverConnect(string server, string port)
             printf("send failed");
         }
 
+        cout << "SEND: " << listservers << endl;
         listservers = setSohEoh("LISTSERVERS,P3_GROUP_62");
 
         send(sock, listservers.c_str(), listservers.length(), 0);
@@ -340,22 +338,19 @@ void SAVE_MSG(int sock, vector<string> tokens) {
         if (id == tokens[2]) {
             msg = tokens[1] + "," + tokens[2] + "," + tokens[3];
             server.second->messages.push_back(msg);
-            server.second->msgCount++;
         }
     }
-
 }
 
 void GET_MSG(int sock) {
     string msg = "GET_MSG,P3_GROUP_62";
-    // msg += servers[sock]->id;
+    cout << "SEND: " << msg << endl;
     msg = setSohEoh(msg);
     send(sock, msg.c_str(), msg.length(), 0);
 }
 
 void SEND_MSG(int sock, vector<string> tokens) {
     string id;
-    int n;
 
     // TOKENS[1] = FROM_GROUP_ID
     // string msg = tokens[1] + ",";
@@ -368,22 +363,17 @@ void SEND_MSG(int sock, vector<string> tokens) {
         id = server.second->id;
         // TOKENS[2] = TO_GROUP_ID
         // cout << "Server: " << server.second->id << "\nToken: " << tokens[2].c_str() << endl;
-        if (id == tokens[2]) {
+        if (id == tokens[1]) {
+            while(server.second->messages.size() != 0) {
+                msg = "SEND_MSG,";
+                msg += server.second->messages.back();
 
-            n = server.second->msgCount;
+                cout << "SEND: " << msg << endl;
+                msg = setSohEoh(msg);
 
-            if (n < 0) {
+                send(sock, msg.c_str(), msg.length(), 0);
 
-                while (n > 0) {
-                    msg = "SEND_MSG,";
-                    msg += server.second->messages.back();
-                    msg = setSohEoh(msg);
-                    send(sock, msg.c_str(), msg.length(), 0);
-
-                    server.second->messages.pop_back();
-                    server.second->msgCount--;
-                    n = server.second->msgCount;
-                }
+                server.second->messages.pop_back();
             }
         }
     }
@@ -399,13 +389,12 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
     while(getline(ss, token, ','))
         tokens.push_back(token);
 
+
     if(tokens[0].compare("LISTSERVERS") == 0)
     {
         servers[sock]->id = tokens[1];
 
         string msg = "SERVERS,";
-
-        // My info
         msg += "P3_GROUP_62," + myIp() + "," + to_string(serverPort) + ";";
 
         for (auto const& server : servers)
@@ -417,8 +406,12 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
                 msg += server.second->port + ";";
             }
         }
+        cout << "SEND: " << msg << endl;
         msg = setSohEoh(msg);
         send(sock, msg.c_str(), msg.length(), 0);
+    }
+    else if(tokens[0].compare("SERVERS") == 0) {
+        servers[sock]->id = tokens[1];
     }
 
     else if((tokens[0].compare("KEEPALIVE") == 0) && tokens.size() == 2) {
@@ -432,6 +425,7 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
         SEND_MSG(sock, tokens);
     }
     else if((tokens[0].compare("SEND_MSG") == 0) && tokens.size() == 4) {
+        cout << "SEND MSG RECEIVED" << endl;
         SAVE_MSG(sock, tokens);
     }
     else if(tokens[0].compare("LEAVE") == 0) {
@@ -441,8 +435,9 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
         string msg = "STATUSRESP,";
         for (auto const& server : servers) {
             msg += server.second->id + ",";
-            msg += to_string(server.second->msgCount) + ",";
+            msg += to_string(server.second->messages.size()) + ",";
         }
+        cout << "SEND: " << msg << endl;
         msg = setSohEoh(msg);
         send(sock, msg.c_str(), msg.length(), 0);
     }
@@ -489,22 +484,21 @@ void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
       }
   }
   else if((tokens[0].compare("SENDMSG") == 0) && tokens.size() == 3) {
-      string msg = tokens[1] + ",";
-      msg += tokens[2] + ";";
+      string msg = + "P3_GROUP_62" + tokens[1] + ",";
+      msg += tokens[2];
       for (auto server : servers) {
           if (server.second->id == tokens[1]) {
               server.second->messages.push_back(msg);
-              server.second->msgCount++;
           }
       }
   }
   else if(tokens[0].compare("KEEPALIVE") == 0)
   {
     string msg = "KEEPALIVE,";
-    printf("Sent KEEPALIVE\n");
     for (auto const& server : servers) {
-        msg += server.second->msgCount;
+        msg += server.second->messages.size();
         msg = setSohEoh(msg);
+        // printf("Sent KEEPALIVE,%d to %s", server.second->messages.size(), server.second->id);
         send(server.second->sock, msg.c_str(), msg.length(), 0);
     }
   }
@@ -619,6 +613,8 @@ int main(int argc, char* argv[])
                 n--;
                 
                 string listserver = "LISTSERVERS,P3_GROUP_62";
+
+                cout << "SEND: " << listserver << endl;
                 listserver = setSohEoh(listserver);
 
                 send(listenSock, listserver.c_str(), listserver.length(), 0);
@@ -685,7 +681,7 @@ int main(int argc, char* argv[])
                        }
                        else {
                            cout << "Server: " << rmSohEoh(buffer) << endl;
-                           serverCommand(server->sock, &openSockets, &maxfds, buffer);
+                           serverCommand(server->sock, &openSockets, &maxfds, rmSohEoh(buffer));
                        }
                    }
                }

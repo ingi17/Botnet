@@ -27,12 +27,16 @@
 #include <thread>
 #include <map>
 
+#include <ctime>
+
 // Threaded function for handling responss from server
 
 void listenServer(int serverSocket)
 {
     int nread;                                  // Bytes read from socket
     char buffer[1025];                          // Buffer for reading input
+
+    std::time_t t = std::time(NULL); 
 
     while(true)
     {
@@ -46,7 +50,7 @@ void listenServer(int serverSocket)
        }
        else if(nread > 0)
        {
-          printf("%s\n", buffer);
+          printf("[%s] %s\n", ctime(&t), buffer);
        }
        printf("here\n");
     }
