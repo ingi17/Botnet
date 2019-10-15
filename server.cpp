@@ -534,7 +534,7 @@ void writeToFile(string info)
 {
     time_t current_time = time(NULL);
     ofstream outfile;
-    outfile.open("info.log", ios::out);
+    outfile.open("info.log", ios::app);
     outfile << ctime(&current_time) << " " << info << endl;
     outfile.close();
 }
