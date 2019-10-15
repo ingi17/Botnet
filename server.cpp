@@ -28,12 +28,14 @@
 #include <net/if.h>
 #include <ifaddrs.h>
 
-#include <list>
-
 #include <iostream>
 #include <sstream>
 #include <thread>
 #include <map>
+
+#include <ctime>
+#include <iostream>
+#include <fstream>
 
 #include <unistd.h>
 
@@ -165,14 +167,26 @@ string setSohEoh(string msg)
 }
 
 // Remove token characters from string
-string rmSohEoh(string msg)
+vector<string> rmSohEoh(string msg)
 {
-    if(msg.length() != 0)
-    {
-        msg = msg.substr(1);
-        msg.pop_back();
+    string tmp = msg;
+    vector<string> clean;
+    string token;
+    string delim = "\4";
+    size_t pos = 0;
+
+    while((pos = tmp.find(delim)) != string::npos) {
+        token = tmp.substr(0, pos);
+        token = token.substr(1, pos);
+        clean.push_back(token);
+        tmp.erase(0, pos + delim.length());
     }
-    return msg;
+    /*
+    for(auto cl : clean) {
+        cout << "clean: " << cl << endl;
+    }*/
+
+    return clean;
 }
 
 // --------- Get local IP
@@ -300,12 +314,12 @@ void serverConnect(string server, string port)
     // Open new buffer to read initial LISTSERVERS
     char buffer[1025];
     read(sock, buffer, sizeof(buffer));
-    string msg = rmSohEoh(buffer);
-    cout << "SERVER: " << msg << "\n" << endl;
+    vector<string> msg = rmSohEoh(buffer);
+    cout << "SERVER: " << msg[0] << "\n" << endl;
     
     vector<string> tokens;
     string token;
-    stringstream stream(msg);
+    stringstream stream(msg[0]);
 
     while(getline(stream, token, ','))
         tokens.push_back(token);
@@ -337,8 +351,11 @@ void serverConnect(string server, string port)
 
         // Read SERVERS reply from the server
         read(sock, buffer, sizeof(buffer));
-        string msg = rmSohEoh(buffer);
-        cout << "SERVER:" << msg << "\n" << endl;
+        //string msg = rmSohEoh(buffer);
+        vector<string> msg = rmSohEoh(buffer);
+        for (auto m : msg) {
+            cout << "SERVER:" << m << "\n" << endl;
+        }
 
     }
 }
@@ -377,9 +394,7 @@ void SAVE_MSG(vector<string> tokens) {
         id = server.second->id;
         if (id == tokens[2]) {
             msg = tokens[1] + "," + tokens[2] + "," + tokens[3];
-            cout << "pre-store: " << msg << endl;
             server.second->messages.push_back(msg);
-            cout << "post-store: " << server.second->messages.back() << endl;
         }
     }
 }
@@ -426,12 +441,12 @@ void SEND_MSG(int sock, vector<string> tokens) {
 // Function to handle incoming commands from other servers
 void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
 {
-    
+    cout << "SERVER: " << buffer << endl;
     // Split incoming tokens on commas
     vector<string> tokens;
     string token;
 
-    stringstream ss(rmSohEoh(buffer));
+    stringstream ss(buffer);
 
     while(getline(ss, token, ','))
         tokens.push_back(token);
@@ -515,6 +530,15 @@ void serverCommand(int sock, fd_set *openSockets, int *maxfds, string buffer)
     }
 }
 
+void writeToFile(string info)
+{
+    time_t current_time = time(NULL);
+    ofstream outfile;
+    outfile.open("info.log", ios::out);
+    outfile << ctime(&current_time) << " " << info << endl;
+    outfile.close();
+}
+
 // --------- Client Commands
 // Process command from client to server
 void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds, 
@@ -525,7 +549,6 @@ void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
 
   // Split command from client into tokens for parsing
   std::stringstream stream(buffer);
-  std::cout << buffer << std::endl;
   while(getline(stream, token, ','))
         tokens.push_back(token);
 
@@ -584,9 +607,7 @@ void clientCommand(int clientSocket, fd_set *openSockets, int *maxfds,
       msg += tokens[2];
       for (auto server : servers) {
           if (server.second->id == tokens[1]) {
-              cout << "pre " << msg << endl;
               server.second->messages.push_back(msg);
-              cout << "post " << server.second->messages.back() << endl;
           }
       }
   }
@@ -625,6 +646,8 @@ int main(int argc, char* argv[])
     struct sockaddr_in server;
     socklen_t servLen;
     char buffer[1025];              // buffer for reading from clients
+
+    // time_t t = std::time(NULL);     // Timestamp except for the part where it hardly functions
 
     if(argc != 2)
     {
@@ -753,7 +776,10 @@ int main(int argc, char* argv[])
                       // only triggers if there is something on the socket for us.
                       else
                       {
+                          // TIMESTAMP, except it works extremely awfully
+                          // std::cout << "[" << ctime(&t) << "] " << "Client: " << buffer << std::endl;
                           std::cout << "Client: " << buffer << std::endl;
+                          writeToFile(buffer);
                           clientCommand(client->sock, &openSockets, &maxfds, 
                                         buffer);
                       }
@@ -772,8 +798,13 @@ int main(int argc, char* argv[])
                             closeServer(server->sock, &openSockets, &maxfds);
                        }
                        else {
-                           cout << "Server: " << rmSohEoh(buffer) << endl;
-                           serverCommand(server->sock, &openSockets, &maxfds, buffer);
+                           // TIMESTAMP, except it doesnt work very well
+                           // cout << "[" << ctime(&t) << "] " << "Server: " << rmSohEoh(buffer) << endl;
+                            vector<string> msg = rmSohEoh(buffer);
+                            for (auto m : msg) {
+                                serverCommand(server->sock, &openSockets, &maxfds, m);
+                                writeToFile(m);
+                            }
                        }
                    }
                }

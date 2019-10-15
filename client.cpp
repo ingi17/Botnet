@@ -1,10 +1,13 @@
 //
-// Simple chat client for TSAM-409
+// Simple Botnet client for TSAM
 //
-// Command line: ./chat_client 4000 
+// Command: ./client <IP> <Port>
 //
-// Author: Jacky Mallett (jacky@ru.is)
+// Author: Ingi Thor Adalsteinsson
+// Template: Jacky Mallett (jacky@ru.is)
 //
+// skel: 130.208.243.61
+
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
